@@ -125,18 +125,6 @@ def compute_scores(eval_data, model, tokenizer, num_examples=10):
         tokenized_predicted_text = tokenizer.tokenize(predicted_text)
         tokenized_target_text = tokenizer.tokenize(target_text)[:args.seq_length]
 
-        ## print all types of text in a human readable format
-        print("Input text:", input_text)
-        print("-" * 100)
-        print("Target text:", target_text)
-        print("-" * 100)
-        print("Predicted text:", predicted_text)
-        print("-" * 100)
-        print("Tokenized predicted text:", tokenized_predicted_text)
-        print("-" * 100)
-        print("Tokenized target text:", tokenized_target_text)
-        print("-" * 100)
-
         meteor = meteor_score.meteor_score([tokenized_target_text], tokenized_predicted_text)
         scores['meteor'].append(meteor)
 
