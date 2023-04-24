@@ -24,7 +24,7 @@ conda activate data_aug
 
 
 export PYTHONPATH=. HF_DATASETS_CACHE=/storage/workspaces/inf_fdn/hpc_nfp77/visu/textgen_cache TRANSFORMERS_CACHE=/storage/workspaces/inf_fdn/hpc_nfp77/visu/textgen_cache/models
-python -m scripts.run_exp3 --finetune=True --model=google/mt5-small --train_size=500 --eval_size=100 --seq_length=512 --batch_size=4 --grad_acc_steps=2 --epochs=1
+python -m scripts.run_exp3 --finetune=True --model=google/mt5-small --train_size=500 --eval_size=100 --test_size=100 --seq_length=512 --batch_size=4 --grad_acc_steps=1 --epochs=1
 
 # IMPORTANT:
 # Run with                  sbatch run_gen.sh
