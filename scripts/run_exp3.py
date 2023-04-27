@@ -4,6 +4,8 @@ from transformers import MT5ForConditionalGeneration, AutoTokenizer
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers import IntervalStrategy, EarlyStoppingCallback
 
+from scripts.util import get_batch_size
+
 import os
 import torch
 from nltk.translate import meteor_score
@@ -22,7 +24,6 @@ import time
 import datetime
 
 ### Initialization
-
 def setup_logger():
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
@@ -44,20 +45,25 @@ parser.add_argument("--train_size", help="Size of training set", type=int)
 parser.add_argument("--eval_size", help="Size of evaluation set", type=int)
 parser.add_argument("--test_size", help="Size of test set", type=int)
 parser.add_argument("--seq_length", help="Sequence length for training, evaluation and generation", type=int)
-parser.add_argument("--batch_size", help="Batch size for training and evaluation", type=int)
 parser.add_argument("--grad_acc_steps", help="Gradient accumulation steps for training", type=int)
 parser.add_argument("--epochs", help="Number of training epochs", type=int)
+parser.add_argument("--gm", help="GPU memory size for batch size", type=int)
 args = parser.parse_args()
 
 # print all args
 logger.info(args)
 
+batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.seq_length)
+
 # add train size, seq length to output dir
-output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={args.batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
 # set wandb run name
 wandb.init(name=output_dir.split('/')[-1])
 # log output dir to wandb
 wandb.log({"output_dir": output_dir})
+# generate by sampling or not
+do_sample_on_gen = True
+wandb.log({"do_sample_on_gen": do_sample_on_gen})
 
 # log all args to wandb
 wandb.config.update(args)
@@ -65,7 +71,7 @@ wandb.config.update(args)
 if torch.cuda.is_available():
     device = torch.device("cuda")
     logger.info(torch.cuda.device_count())
-    logger.info("Running on the GPU" + torch.cuda.get_device_name(0))
+    logger.info("Running on the GPU: " + torch.cuda.get_device_name(0))
 else:
     device = torch.device("cpu")
     logger.info("Running on the CPU")
@@ -79,10 +85,9 @@ def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_leng
         max_length=max_length,
         attention_mask=attention_mask,
         num_return_sequences=num_return_sequences,
-        do_sample=True,
+        do_sample=do_sample_on_gen,
         temperature=temperature
     )
-    logger.info(len(output_tokens))
     output_texts = [tokenizer.decode(tokens, skip_special_tokens=True) for tokens in output_tokens]
     return output_texts[0], output_tokens
 
@@ -157,8 +162,6 @@ def compute_scores(test_data, model, tokenizer, num_examples=10):
     bertscore = load("bertscore")
 
     for idx, example in enumerate(test_data):
-        """input_text = f"facts: {example['facts']}"
-        target_text = f"considerations: {example['considerations']}"""
         input_text = example['input_ids']
         tokenized_target_text = example['labels']
         attention_mask = example['attention_mask']
@@ -196,7 +199,7 @@ def compute_scores(test_data, model, tokenizer, num_examples=10):
         scores['rouge'].append(rouge_scores)
 
         # Calculate Bleu scores
-        bleu = sentence_bleu(tokenized_target_text, tokenized_predicted_text, weights=(1, 0, 0, 0))
+        bleu = sentence_bleu([tokenized_target_text], tokenized_predicted_text, weights=(.25, .25, .25, .25))
         scores['bleu'].append(bleu)
 
         # Calculate BERTScore
@@ -205,24 +208,19 @@ def compute_scores(test_data, model, tokenizer, num_examples=10):
 
         # Print examples
         if idx < num_examples:
-            # detokenize tokenized_target_text
-            detokenized_target_text = tokenizer.convert_tokens_to_string(tokenized_target_text)
-            # get first args.seq_length tokens of input_text but convert to string
-            # input_text_cutoff = tokenizer.convert_tokens_to_string(tokenizer.tokenize(input_text)[:args.seq_length])
-
-            logger.info(f"Example {idx + 1}:")
-            logger.info(f"Input: {input_text[:args.seq_length*5]}")
-            logger.info("-" * 100)
+            print("\n", flush=True)
+            print("#" * 180, flush=True)
+            logger.info(f"Example {idx + 1} of {len(test_data)}")
             logger.info(f"Output: {predicted_text}")
             logger.info("-" * 100)
-            logger.info(f"Label: {detokenized_target_text}")
+            logger.info(f"Label: {target_text}")
             logger.info("-" * 100)
             logger.info(f"METEOR Score: {meteor:.4f}")
             logger.info(f"ROUGE Score: {rouge_scores}")
             logger.info(f"BLEU Score: {bleu:.4f}")
             logger.info(f"BERTScore: {bert}")
-            logger.info("#" * 180)
-            print()
+            print("#" * 180, flush=True)
+            print("\n", flush=True)
 
     return np.mean(scores['meteor']), average_rouge_scores(scores['rouge']), np.mean(scores['bleu']), average_bert_score(scores['bert'])
 
@@ -235,7 +233,6 @@ def load_model(model_name, tokenizer_name):
         model = AutoModelForCausalLM.from_pretrained("ai-forever/mGPT")
     else:
         raise ValueError(f"Model {model_name} not supported")
-    logger.info(f"Loaded model: {model}")
     return model, tokenizer
 
 def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg):
@@ -255,11 +252,12 @@ def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_scor
         "BERT_score/test/recall": bert_score_avg['recall'],
         "BERT_score/test/f1": bert_score_avg['f1']
     })
-
+    print()
     logger.info(f"Average METEOR score: {meteor_score_avg:.4f}")
     logger.info(f"Average ROUGE score: {rouge_score_avg}")
     logger.info(f"Average BLEU score: {bleu_score_avg:.4f}")
     logger.info(f"Average BERTScore: {bert_score_avg}")
+    print()
 
 
 def log_duration(start_time, end_time_train, end_time):
@@ -268,9 +266,11 @@ def log_duration(start_time, end_time_train, end_time):
     time_taken_train = end_time_train - start_time
     time_taken_eval = end_time - end_time_train
     # Print the time taken in hours, minutes, and seconds
+    print()
     logger.info("Time taken: " + str(datetime.timedelta(seconds=time_taken)))
     logger.info("Time taken for training: " + str(datetime.timedelta(seconds=time_taken_train)))
     logger.info("Time taken for testing: " + str(datetime.timedelta(seconds=time_taken_eval)))
+    print()
     # Convert the time taken to minutes
     time_taken_minutes = time_taken / 60
     time_taken_train_minutes = time_taken_train / 60
@@ -330,8 +330,8 @@ model.resize_token_embeddings(len(tokenizer))
 training_args = TrainingArguments(
     output_dir="output",
     num_train_epochs=args.epochs,
-    per_device_train_batch_size=args.batch_size,
-    per_device_eval_batch_size=args.batch_size,
+    per_device_train_batch_size=batch_size,
+    per_device_eval_batch_size=batch_size,
     gradient_accumulation_steps=args.grad_acc_steps,
     save_steps=10_000,
     save_total_limit=2,
@@ -384,4 +384,5 @@ end_time = time.time()
 # Log time taken to wandb and prints them (for train and eval)
 log_duration(start_time, end_time_train, end_time)
 
+print()
 logger.info("Finished evaluation")
