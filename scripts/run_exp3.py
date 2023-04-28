@@ -55,19 +55,6 @@ logger.info(args)
 
 batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.seq_length)
 
-# add train size, seq length to output dir
-output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
-# set wandb run name
-wandb.init(name=output_dir.split('/')[-1])
-# log output dir to wandb
-wandb.log({"output_dir": output_dir})
-# generate by sampling or not
-do_sample_on_gen = True
-wandb.log({"do_sample_on_gen": do_sample_on_gen})
-
-# log all args to wandb
-wandb.config.update(args)
-
 if torch.cuda.is_available():
     device = torch.device("cuda")
     logger.info(torch.cuda.device_count())
@@ -165,7 +152,10 @@ def compute_scores(test_data, model, tokenizer, num_examples=10):
         input_text = example['input_ids']
         tokenized_target_text = example['labels']
         attention_mask = example['attention_mask']
+        # measure time
+        start_time_gen = time.time()
         predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask, max_length=args.seq_length, temperature=1)
+        end_time_gen = time.time()
 
         target_text = tokenizer.decode(tokenized_target_text, skip_special_tokens=True)
 
@@ -219,6 +209,8 @@ def compute_scores(test_data, model, tokenizer, num_examples=10):
             logger.info(f"ROUGE Score: {rouge_scores}")
             logger.info(f"BLEU Score: {bleu:.4f}")
             logger.info(f"BERTScore: {bert}")
+            # log time
+            logger.info(f"Time to generate: {end_time_gen - start_time_gen}")
             print("#" * 180, flush=True)
             print("\n", flush=True)
 
@@ -258,7 +250,6 @@ def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_scor
     logger.info(f"Average BLEU score: {bleu_score_avg:.4f}")
     logger.info(f"Average BERTScore: {bert_score_avg}")
     print()
-
 
 def log_duration(start_time, end_time_train, end_time):
     # Calculate the time taken in seconds
@@ -306,19 +297,44 @@ num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
 model.config.pad_token_id = tokenizer.pad_token_id
 model.config.eos_token_id = tokenizer.eos_token_id
 
-logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " finetune: " + str(finetune) + " output_dir: " + output_dir)
-
-
 # Load dataset
 dataset = load_dataset("rcds/swiss_court_view_generation", "full")
-train_dataset = dataset['train'].select(range(args.train_size))
-eval_dataset = dataset['validation'].select(range(args.eval_size))
-test_dataset = dataset['test'].select(range(args.test_size))
+train_dataset = dataset['train']
+eval_dataset = dataset['validation']
+test_dataset = dataset['test']
 
+# Update args values with the full lengths of the dataset splits if the args values are -1
+if args.train_size == -1:
+    args.train_size = len(train_dataset)
+if args.eval_size == -1:
+    args.eval_size = len(eval_dataset)
+if args.test_size == -1:
+    args.test_size = len(test_dataset)
+
+# Select subsets of the dataset based on the updated args values
+train_dataset = train_dataset.select(range(args.train_size))
+eval_dataset = eval_dataset.select(range(args.eval_size))
+test_dataset = test_dataset.select(range(args.test_size))
+
+# add train size, seq length to output dir
+output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+# set wandb run name
+wandb.init(name=output_dir.split('/')[-1])
+# log output dir to wandb
+wandb.log({"output_dir": output_dir})
+
+logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " finetune: " + str(finetune) + " output_dir: " + output_dir)
 logger.info("Train dataset size: " + str(len(train_dataset)) + ", Eval dataset size: " + str(len(eval_dataset)) + ", Test dataset size: " + str(len(test_dataset)))
 
 os.environ["WANDB_PROJECT"] = "court view generation"
 os.environ["WANDB_RUN_GROUP"] = f"{model_name}, {len(train_dataset)}"
+
+# generate by sampling or not
+do_sample_on_gen = True
+wandb.log({"do_sample_on_gen": do_sample_on_gen})
+
+# log all args to wandb
+wandb.config.update(args)
 
 
 # Tokenize datasets
