@@ -6,6 +6,9 @@ from transformers import IntervalStrategy, EarlyStoppingCallback
 
 from scripts.util import get_batch_size
 
+import nltk
+nltk.download('wordnet')
+
 import os
 import torch
 from nltk.translate import meteor_score
