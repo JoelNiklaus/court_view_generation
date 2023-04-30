@@ -49,8 +49,8 @@ parser.add_argument("--model", help="Model name for finetune / evaluation (depen
 parser.add_argument("--train_size", help="Size of training set", type=int)
 parser.add_argument("--eval_size", help="Size of evaluation set", type=int)
 parser.add_argument("--test_size", help="Size of test set", type=int)
-parser.add_argument("--seq_length", help="Sequence length for training, evaluation and generation", type=int)
-parser.add_argument("--grad_acc_steps", help="Gradient accumulation steps for training", type=int)
+parser.add_argument("--input_length", help="Input sequence length for training, evaluation and generation", type=int)
+parser.add_argument("--output_length", help="Output sequence length for training, evaluation and generation", type=int)
 parser.add_argument("--epochs", help="Number of training epochs", type=int)
 parser.add_argument("--total_batch_size", help="The total batch size to use", type=int)
 parser.add_argument("--gm", help="GPU memory size for batch size", type=int)
@@ -59,7 +59,7 @@ args = parser.parse_args()
 # print all args
 logger.info(args)
 
-batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.seq_length)
+batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.input_length, args.output_length)
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -85,15 +85,15 @@ def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_leng
     return output_texts[0], output_tokens
 
 # Preprocess data
-def preprocess_function(examples, max_length):
+def preprocess_function(examples, input_length=args.input_length, output_length=args.output_length):
     input_texts = [f"facts: {f}" for f in examples["facts"]]
     target_texts = [f"considerations: {c}" for c in examples["considerations"]]
 
     input_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=max_length) for text
+        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length) for text
         in input_texts]
     target_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=max_length) for text
+        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=output_length) for text
         in target_texts]
 
     inputs = {
@@ -161,7 +161,7 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
         attention_mask = example['attention_mask']
         # measure time
         start_time_gen = time.time()
-        predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask, max_length=args.seq_length, temperature=1)
+        predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask, max_length=args.output_length, temperature=1)
         end_time_gen = time.time()
 
         target_text = tokenizer.decode(tokenized_target_text, skip_special_tokens=True)
@@ -353,7 +353,7 @@ test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
 
 grad_acc_steps = args.total_batch_size // batch_size
 # add train size, seq length to output dir
-output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_inlen={args.input_length}_outlen={args.output_length}_batchsize={batch_size}_gaccsteps={grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
 # set wandb run name
 wandb.init(name=output_dir.split('/')[-1])
 # log output dir to wandb
@@ -374,9 +374,9 @@ wandb.config.update(args)
 
 
 # Tokenize datasets
-train_data = train_dataset.map(lambda x: preprocess_function(x, max_length=args.seq_length), batched=True)
-eval_data = eval_dataset.map(lambda x: preprocess_function(x, max_length=args.seq_length), batched=True)
-test_data = test_dataset.map(lambda x: preprocess_function(x, max_length=args.seq_length), batched=True)
+train_data = train_dataset.map(lambda x: preprocess_function(x), batched=True)
+eval_data = eval_dataset.map(lambda x: preprocess_function(x), batched=True)
+test_data = test_dataset.map(lambda x: preprocess_function(x), batched=True)
 
 model.resize_token_embeddings(len(tokenizer))
 training_args = TrainingArguments(
