@@ -12,6 +12,8 @@ from nltk.translate import meteor_score
 import numpy as np
 import argparse
 import wandb
+import json
+import csv
 
 from nltk.translate.bleu_score import corpus_bleu, sentence_bleu
 from rouge import Rouge
@@ -57,7 +59,7 @@ batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.seq_length)
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
-    logger.info(torch.cuda.device_count())
+    logger.info(f"device count: {torch.cuda.device_count()}")
     logger.info("Running on the GPU: " + torch.cuda.get_device_name(0))
 else:
     device = torch.device("cpu")
@@ -142,8 +144,9 @@ def average_bert_score(bert_scores):
         'f1': total_f1 / count
     }
 
+output_examples = []
 
-def compute_scores(test_data, model, tokenizer, num_examples=10):
+def compute_scores(test_data, model, tokenizer, num_examples=100):
     scores = {'meteor': [], 'rouge': [], 'bleu': [], 'bert': []}
     rouge = Rouge()
     bertscore = load("bertscore")
@@ -193,8 +196,21 @@ def compute_scores(test_data, model, tokenizer, num_examples=10):
         scores['bleu'].append(bleu)
 
         # Calculate BERTScore
-        bert = bertscore.compute(predictions=[predicted_text], references=[target_text], lang="de")
+        bert = bertscore.compute(predictions=[predicted_text], references=[target_text], model_type="bert-base-multilingual-cased",  lang=['de', 'fr', 'it'])
         scores['bert'].append(bert)
+
+        output_examples.append({
+            'target': target_text,
+            'predicted': predicted_text,
+            'meteor': meteor,
+            'bert-f1': bert['f1'][0],
+            'bleu': bleu,
+            'rouge-1_f1': rouge_scores['rouge-1']['f'],
+            'rouge-2_f1': rouge_scores['rouge-2']['f'],
+            'rouge-l_f1': rouge_scores['rouge-l']['f'],
+            'bert_full': bert,
+            'rouge_full': rouge_scores,
+        })
 
         # Print examples
         if idx < num_examples:
@@ -270,6 +286,20 @@ def log_duration(start_time, end_time_train, end_time):
     wandb.log({"time_taken": time_taken_minutes,
                "time_taken_train": time_taken_train_minutes,
                "time_taken_test": time_taken_eval_minutes})
+
+def export_output(data):
+    # Export to CSV
+    with open(f"{output_dir}/output_{output_dir.split('/')[-1]}.csv", mode='w', newline='') as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=data[0].keys())
+        writer.writeheader()
+        for row in data:
+            writer.writerow(row)
+
+    # Export to JSONL
+    with open(f"{output_dir}/output_{output_dir.split('/')[-1]}.jsonl", mode='w') as jsonl_file:
+        for row in data:
+            json.dump(row, jsonl_file)
+            jsonl_file.write('\n')
 
 class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -393,6 +423,12 @@ meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg = compute_scor
 
 # Print and log scores to wandb
 log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg)
+
+try:
+    # save output examples to file
+    export_output(output_examples)
+except Exception as e:
+    logger.info("Error exporting output examples: " + str(e))
 
 # end timer
 end_time = time.time()
