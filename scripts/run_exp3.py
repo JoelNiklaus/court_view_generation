@@ -342,9 +342,10 @@ if args.test_size == -1:
     args.test_size = len(test_dataset)
 
 # Select subsets of the dataset based on the updated args values
-train_dataset = train_dataset.select(range(args.train_size))
-eval_dataset = eval_dataset.select(range(args.eval_size))
-test_dataset = test_dataset.select(range(args.test_size))
+seed=42
+train_dataset = train_dataset.shuffle(seed).select(range(args.train_size))
+eval_dataset = eval_dataset.shuffle(seed).select(range(args.eval_size))
+test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
 
 # add train size, seq length to output dir
 output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
