@@ -52,6 +52,7 @@ parser.add_argument("--test_size", help="Size of test set", type=int)
 parser.add_argument("--seq_length", help="Sequence length for training, evaluation and generation", type=int)
 parser.add_argument("--grad_acc_steps", help="Gradient accumulation steps for training", type=int)
 parser.add_argument("--epochs", help="Number of training epochs", type=int)
+parser.add_argument("--total_batch_size", help="The total batch size to use", type=int)
 parser.add_argument("--gm", help="GPU memory size for batch size", type=int)
 args = parser.parse_args()
 
@@ -350,6 +351,7 @@ train_dataset = train_dataset.shuffle(seed).select(range(args.train_size))
 eval_dataset = eval_dataset.shuffle(seed).select(range(args.eval_size))
 test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
 
+grad_acc_steps = args.total_batch_size // batch_size
 # add train size, seq length to output dir
 output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
 # set wandb run name
@@ -382,16 +384,18 @@ training_args = TrainingArguments(
     num_train_epochs=args.epochs,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
-    gradient_accumulation_steps=args.grad_acc_steps,
+    gradient_accumulation_steps=grad_acc_steps,
+    evaluation_strategy=IntervalStrategy.STEPS,
+    eval_steps=10,
     save_steps=10_000,
     save_total_limit=2,
-    evaluation_strategy=IntervalStrategy.STEPS,
-    eval_steps=100,
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
     greater_is_better=False,
     logging_dir="logs",
     report_to="wandb",
+    bf16=True,
+    bf16_full_eval=True,
 )
 
 trainer = CustomTrainer(
