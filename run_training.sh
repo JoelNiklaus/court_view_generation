@@ -1,13 +1,19 @@
-export CUDA_VISIBLE_DEVICES=1
-# models: mgpt, google/mt5-small, google/mt5-base, google/mt5-large, google/mt5-xl
+#export CUDA_VISIBLE_DEVICES=1
+export WANDB_PROJECT=CourtViewGeneration
 
-python -m scripts.run_exp3 \
+
+# if model is mgpt, then input length needs to be the same as output length
+
+MODEL=$1
+INPUT_LENGTH=$2
+
+/home/groups/deho/miniconda3/envs/court_gen/bin/python -m scripts.run_exp3 \
     --finetune=True \
-    --model=mgpt \
-    --train_size=1000 \
-    --eval_size=100 \
-    --test_size=100 \
-    --input_length=2048 \
+    --model=$MODEL \
+    --train_size=-1 \
+    --eval_size=1000 \
+    --test_size=1000 \
+    --input_length=$INPUT_LENGTH \
     --output_length=512 \
     --total_batch_size=16 \
     --epochs=1 \
