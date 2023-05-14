@@ -6,6 +6,10 @@ from transformers import IntervalStrategy, EarlyStoppingCallback
 
 from scripts.util import get_batch_size
 
+import nltk
+
+nltk.download('wordnet')
+
 import os
 import torch
 from nltk.translate import meteor_score
@@ -25,6 +29,7 @@ import logging
 import time
 import datetime
 
+
 ### Initialization
 def setup_logger():
     logger = logging.getLogger(__name__)
@@ -38,6 +43,7 @@ def setup_logger():
 
     return logger
 
+
 logger = setup_logger()
 
 parser = argparse.ArgumentParser()
@@ -46,16 +52,17 @@ parser.add_argument("--model", help="Model name for finetune / evaluation (depen
 parser.add_argument("--train_size", help="Size of training set", type=int)
 parser.add_argument("--eval_size", help="Size of evaluation set", type=int)
 parser.add_argument("--test_size", help="Size of test set", type=int)
-parser.add_argument("--seq_length", help="Sequence length for training, evaluation and generation", type=int)
-parser.add_argument("--grad_acc_steps", help="Gradient accumulation steps for training", type=int)
+parser.add_argument("--input_length", help="Input sequence length for training, evaluation and generation", type=int)
+parser.add_argument("--output_length", help="Output sequence length for training, evaluation and generation", type=int)
 parser.add_argument("--epochs", help="Number of training epochs", type=int)
+parser.add_argument("--total_batch_size", help="The total batch size to use", type=int)
 parser.add_argument("--gm", help="GPU memory size for batch size", type=int)
 args = parser.parse_args()
 
 # print all args
 logger.info(args)
 
-batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.seq_length)
+batch_size = get_batch_size(args.model.split('/')[-1], args.gm, args.input_length, args.output_length)
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -65,8 +72,10 @@ else:
     device = torch.device("cpu")
     logger.info("Running on the CPU")
 
+
 ### Some Methods
-def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_length, num_return_sequences=1, temperature=1.0):
+def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_length, num_return_sequences=1,
+                  temperature=1.0):
     input_tokens = torch.tensor(input_text_encoded).unsqueeze(0).to(device)
     attention_mask = torch.tensor(attention_mask).unsqueeze(0).to(device)
     output_tokens = model.generate(
@@ -80,16 +89,19 @@ def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_leng
     output_texts = [tokenizer.decode(tokens, skip_special_tokens=True) for tokens in output_tokens]
     return output_texts[0], output_tokens
 
+
 # Preprocess data
-def preprocess_function(examples, max_length):
+def preprocess_function(examples, input_length=args.input_length, output_length=args.output_length):
     input_texts = [f"facts: {f}" for f in examples["facts"]]
     target_texts = [f"considerations: {c}" for c in examples["considerations"]]
 
     input_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=max_length) for text
+        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length)
+        for text
         in input_texts]
     target_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=max_length) for text
+        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True,
+                              max_length=output_length) for text
         in target_texts]
 
     inputs = {
@@ -106,6 +118,7 @@ def preprocess_function(examples, max_length):
         "attention_mask": inputs["attention_mask"].tolist(),
         "labels": targets["input_ids"].tolist(),
     }
+
 
 def average_rouge_scores(rouge_scores_list):
     avg_scores = {
@@ -127,6 +140,7 @@ def average_rouge_scores(rouge_scores_list):
 
     return avg_scores
 
+
 def average_bert_score(bert_scores):
     total_precision = 0
     total_recall = 0
@@ -144,7 +158,9 @@ def average_bert_score(bert_scores):
         'f1': total_f1 / count
     }
 
+
 output_examples = []
+
 
 def compute_scores(test_data, model, tokenizer, num_examples=100):
     scores = {'meteor': [], 'rouge': [], 'bleu': [], 'bert': []}
@@ -157,7 +173,8 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
         attention_mask = example['attention_mask']
         # measure time
         start_time_gen = time.time()
-        predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask, max_length=args.seq_length, temperature=1)
+        predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask,
+                                                                 max_length=args.output_length, temperature=1)
         end_time_gen = time.time()
 
         target_text = tokenizer.decode(tokenized_target_text, skip_special_tokens=True)
@@ -196,7 +213,8 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
         scores['bleu'].append(bleu)
 
         # Calculate BERTScore
-        bert = bertscore.compute(predictions=[predicted_text], references=[target_text], model_type="bert-base-multilingual-cased",  lang=['de', 'fr', 'it'])
+        bert = bertscore.compute(predictions=[predicted_text], references=[target_text],
+                                 model_type="bert-base-multilingual-cased", lang=['de', 'fr', 'it'])
         scores['bert'].append(bert)
 
         output_examples.append({
@@ -230,7 +248,9 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
             print("#" * 180, flush=True)
             print("\n", flush=True)
 
-    return np.mean(scores['meteor']), average_rouge_scores(scores['rouge']), np.mean(scores['bleu']), average_bert_score(scores['bert'])
+    return np.mean(scores['meteor']), average_rouge_scores(scores['rouge']), np.mean(
+        scores['bleu']), average_bert_score(scores['bert'])
+
 
 def load_model(model_name, tokenizer_name):
     if 'mt5' in model_name:
@@ -242,6 +262,7 @@ def load_model(model_name, tokenizer_name):
     else:
         raise ValueError(f"Model {model_name} not supported")
     return model, tokenizer
+
 
 def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg):
     wandb.log({
@@ -267,6 +288,7 @@ def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_scor
     logger.info(f"Average BERTScore: {bert_score_avg}")
     print()
 
+
 def log_duration(start_time, end_time_train, end_time):
     # Calculate the time taken in seconds
     time_taken = end_time - start_time
@@ -287,6 +309,7 @@ def log_duration(start_time, end_time_train, end_time):
                "time_taken_train": time_taken_train_minutes,
                "time_taken_test": time_taken_eval_minutes})
 
+
 def export_output(data):
     # Export to CSV
     with open(f"{output_dir}/output_{output_dir.split('/')[-1]}.csv", mode='w', newline='') as csv_file:
@@ -301,6 +324,7 @@ def export_output(data):
             json.dump(row, jsonl_file)
             jsonl_file.write('\n')
 
+
 class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels")
@@ -309,6 +333,7 @@ class CustomTrainer(Trainer):
         loss_fct = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
+
 
 # start timer
 start_time = time.time()
@@ -342,19 +367,23 @@ if args.test_size == -1:
     args.test_size = len(test_dataset)
 
 # Select subsets of the dataset based on the updated args values
-train_dataset = train_dataset.select(range(args.train_size))
-eval_dataset = eval_dataset.select(range(args.eval_size))
-test_dataset = test_dataset.select(range(args.test_size))
+seed = 42
+train_dataset = train_dataset.shuffle(seed).select(range(args.train_size))
+eval_dataset = eval_dataset.shuffle(seed).select(range(args.eval_size))
+test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
 
+grad_acc_steps = args.total_batch_size // batch_size
 # add train size, seq length to output dir
-output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_seqlen={args.seq_length}_batchsize={batch_size}_gaccsteps={args.grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_inlen={args.input_length}_outlen={args.output_length}_batchsize={batch_size}_gaccsteps={grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
 # set wandb run name
 wandb.init(name=output_dir.split('/')[-1])
 # log output dir to wandb
 wandb.log({"output_dir": output_dir})
 
-logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " finetune: " + str(finetune) + " output_dir: " + output_dir)
-logger.info("Train dataset size: " + str(len(train_dataset)) + ", Eval dataset size: " + str(len(eval_dataset)) + ", Test dataset size: " + str(len(test_dataset)))
+logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " finetune: " + str(
+    finetune) + " output_dir: " + output_dir)
+logger.info("Train dataset size: " + str(len(train_dataset)) + ", Eval dataset size: " + str(
+    len(eval_dataset)) + ", Test dataset size: " + str(len(test_dataset)))
 
 os.environ["WANDB_PROJECT"] = "court view generation"
 os.environ["WANDB_RUN_GROUP"] = f"{model_name}, {len(train_dataset)}"
@@ -366,11 +395,10 @@ wandb.log({"do_sample_on_gen": do_sample_on_gen})
 # log all args to wandb
 wandb.config.update(args)
 
-
 # Tokenize datasets
-train_data = train_dataset.map(lambda x: preprocess_function(x, max_length=args.seq_length), batched=True)
-eval_data = eval_dataset.map(lambda x: preprocess_function(x, max_length=args.seq_length), batched=True)
-test_data = test_dataset.map(lambda x: preprocess_function(x, max_length=args.seq_length), batched=True)
+train_data = train_dataset.map(lambda x: preprocess_function(x), batched=True)
+eval_data = eval_dataset.map(lambda x: preprocess_function(x), batched=True)
+test_data = test_dataset.map(lambda x: preprocess_function(x), batched=True)
 
 model.resize_token_embeddings(len(tokenizer))
 training_args = TrainingArguments(
@@ -378,16 +406,18 @@ training_args = TrainingArguments(
     num_train_epochs=args.epochs,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
-    gradient_accumulation_steps=args.grad_acc_steps,
+    gradient_accumulation_steps=grad_acc_steps,
+    evaluation_strategy=IntervalStrategy.STEPS,
+    eval_steps=1000,
     save_steps=10_000,
     save_total_limit=2,
-    evaluation_strategy=IntervalStrategy.STEPS,
-    eval_steps=100,
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
     greater_is_better=False,
     logging_dir="logs",
     report_to="wandb",
+    bf16=True,
+    bf16_full_eval=True,
 )
 
 trainer = CustomTrainer(
@@ -416,7 +446,7 @@ if not finetune:
 # Compute METEOR score
 logger.info("testing model...")
 
-model.eval() # set model to evaluation mode
+model.eval()  # set model to evaluation mode
 
 # Evaluate model on test dataset
 meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg = compute_scores(test_data, model, tokenizer)
