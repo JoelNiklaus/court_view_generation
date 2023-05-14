@@ -7,6 +7,7 @@ from transformers import IntervalStrategy, EarlyStoppingCallback
 from scripts.util import get_batch_size
 
 import nltk
+
 nltk.download('wordnet')
 
 import os
@@ -28,6 +29,7 @@ import logging
 import time
 import datetime
 
+
 ### Initialization
 def setup_logger():
     logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ def setup_logger():
     logger.addHandler(console_handler)
 
     return logger
+
 
 logger = setup_logger()
 
@@ -69,8 +72,10 @@ else:
     device = torch.device("cpu")
     logger.info("Running on the CPU")
 
+
 ### Some Methods
-def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_length, num_return_sequences=1, temperature=1.0):
+def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_length, num_return_sequences=1,
+                  temperature=1.0):
     input_tokens = torch.tensor(input_text_encoded).unsqueeze(0).to(device)
     attention_mask = torch.tensor(attention_mask).unsqueeze(0).to(device)
     output_tokens = model.generate(
@@ -84,16 +89,19 @@ def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_leng
     output_texts = [tokenizer.decode(tokens, skip_special_tokens=True) for tokens in output_tokens]
     return output_texts[0], output_tokens
 
+
 # Preprocess data
 def preprocess_function(examples, input_length=args.input_length, output_length=args.output_length):
     input_texts = [f"facts: {f}" for f in examples["facts"]]
     target_texts = [f"considerations: {c}" for c in examples["considerations"]]
 
     input_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length) for text
+        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length)
+        for text
         in input_texts]
     target_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=output_length) for text
+        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True,
+                              max_length=output_length) for text
         in target_texts]
 
     inputs = {
@@ -110,6 +118,7 @@ def preprocess_function(examples, input_length=args.input_length, output_length=
         "attention_mask": inputs["attention_mask"].tolist(),
         "labels": targets["input_ids"].tolist(),
     }
+
 
 def average_rouge_scores(rouge_scores_list):
     avg_scores = {
@@ -131,6 +140,7 @@ def average_rouge_scores(rouge_scores_list):
 
     return avg_scores
 
+
 def average_bert_score(bert_scores):
     total_precision = 0
     total_recall = 0
@@ -148,7 +158,9 @@ def average_bert_score(bert_scores):
         'f1': total_f1 / count
     }
 
+
 output_examples = []
+
 
 def compute_scores(test_data, model, tokenizer, num_examples=100):
     scores = {'meteor': [], 'rouge': [], 'bleu': [], 'bert': []}
@@ -161,7 +173,8 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
         attention_mask = example['attention_mask']
         # measure time
         start_time_gen = time.time()
-        predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask, max_length=args.output_length, temperature=1)
+        predicted_text, tokenized_predicted_text = generate_text(model, tokenizer, input_text, attention_mask,
+                                                                 max_length=args.output_length, temperature=1)
         end_time_gen = time.time()
 
         target_text = tokenizer.decode(tokenized_target_text, skip_special_tokens=True)
@@ -200,7 +213,8 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
         scores['bleu'].append(bleu)
 
         # Calculate BERTScore
-        bert = bertscore.compute(predictions=[predicted_text], references=[target_text], model_type="bert-base-multilingual-cased",  lang=['de', 'fr', 'it'])
+        bert = bertscore.compute(predictions=[predicted_text], references=[target_text],
+                                 model_type="bert-base-multilingual-cased", lang=['de', 'fr', 'it'])
         scores['bert'].append(bert)
 
         output_examples.append({
@@ -234,7 +248,9 @@ def compute_scores(test_data, model, tokenizer, num_examples=100):
             print("#" * 180, flush=True)
             print("\n", flush=True)
 
-    return np.mean(scores['meteor']), average_rouge_scores(scores['rouge']), np.mean(scores['bleu']), average_bert_score(scores['bert'])
+    return np.mean(scores['meteor']), average_rouge_scores(scores['rouge']), np.mean(
+        scores['bleu']), average_bert_score(scores['bert'])
+
 
 def load_model(model_name, tokenizer_name):
     if 'mt5' in model_name:
@@ -246,6 +262,7 @@ def load_model(model_name, tokenizer_name):
     else:
         raise ValueError(f"Model {model_name} not supported")
     return model, tokenizer
+
 
 def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg):
     wandb.log({
@@ -271,6 +288,7 @@ def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_scor
     logger.info(f"Average BERTScore: {bert_score_avg}")
     print()
 
+
 def log_duration(start_time, end_time_train, end_time):
     # Calculate the time taken in seconds
     time_taken = end_time - start_time
@@ -291,6 +309,7 @@ def log_duration(start_time, end_time_train, end_time):
                "time_taken_train": time_taken_train_minutes,
                "time_taken_test": time_taken_eval_minutes})
 
+
 def export_output(data):
     # Export to CSV
     with open(f"{output_dir}/output_{output_dir.split('/')[-1]}.csv", mode='w', newline='') as csv_file:
@@ -305,6 +324,7 @@ def export_output(data):
             json.dump(row, jsonl_file)
             jsonl_file.write('\n')
 
+
 class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels")
@@ -313,6 +333,7 @@ class CustomTrainer(Trainer):
         loss_fct = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
+
 
 # start timer
 start_time = time.time()
@@ -346,7 +367,7 @@ if args.test_size == -1:
     args.test_size = len(test_dataset)
 
 # Select subsets of the dataset based on the updated args values
-seed=42
+seed = 42
 train_dataset = train_dataset.shuffle(seed).select(range(args.train_size))
 eval_dataset = eval_dataset.shuffle(seed).select(range(args.eval_size))
 test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
@@ -359,8 +380,10 @@ wandb.init(name=output_dir.split('/')[-1])
 # log output dir to wandb
 wandb.log({"output_dir": output_dir})
 
-logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " finetune: " + str(finetune) + " output_dir: " + output_dir)
-logger.info("Train dataset size: " + str(len(train_dataset)) + ", Eval dataset size: " + str(len(eval_dataset)) + ", Test dataset size: " + str(len(test_dataset)))
+logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " finetune: " + str(
+    finetune) + " output_dir: " + output_dir)
+logger.info("Train dataset size: " + str(len(train_dataset)) + ", Eval dataset size: " + str(
+    len(eval_dataset)) + ", Test dataset size: " + str(len(test_dataset)))
 
 os.environ["WANDB_PROJECT"] = "court view generation"
 os.environ["WANDB_RUN_GROUP"] = f"{model_name}, {len(train_dataset)}"
@@ -371,7 +394,6 @@ wandb.log({"do_sample_on_gen": do_sample_on_gen})
 
 # log all args to wandb
 wandb.config.update(args)
-
 
 # Tokenize datasets
 train_data = train_dataset.map(lambda x: preprocess_function(x), batched=True)
@@ -424,7 +446,7 @@ if not finetune:
 # Compute METEOR score
 logger.info("testing model...")
 
-model.eval() # set model to evaluation mode
+model.eval()  # set model to evaluation mode
 
 # Evaluate model on test dataset
 meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg = compute_scores(test_data, model, tokenizer)
