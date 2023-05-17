@@ -4,7 +4,7 @@ def get_batch_size(model_type, gpu_memory, input_length, output_length):
         'mgpt': {
             24: {512: 0, 1024: 0, 1536: 0, 2048: 0},
             48: {512: 1, 1024: 1, 1536: 1, 2048: 1},  # never tested
-            80: {512: 8, 1024: 6, 1536: 2, 2048: 1},  # tested
+            80: {512: 8, 1024: 6, 1536: 2, 2048: 2},  # tested
         },
         'mt5-small': {
             24: {512: 4, 1024: 2, 2048: 1},  # tested with 512, 1024 and 2048 seq length
