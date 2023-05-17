@@ -1,9 +1,10 @@
 def get_batch_size(model_type, gpu_memory, input_length, output_length):
+    # 2048 is the maximum input length for all models
     batch_sizes_same = {
         'mgpt': {
-            24: {512: 0, 1024: 0, 2048: 0},
-            48: {512: 1, 1024: 1, 2048: 1},  # never tested
-            80: {512: 8, 1024: 6, 2048: 2},  # tested 1024 and 2048
+            24: {512: 0, 1024: 0, 1536: 0, 2048: 0},
+            48: {512: 1, 1024: 1, 1536: 1, 2048: 1},  # never tested
+            80: {512: 8, 1024: 6, 1536: 2, 2048: 1},  # tested
         },
         'mt5-small': {
             24: {512: 4, 1024: 2, 2048: 1},  # tested with 512, 1024 and 2048 seq length
@@ -49,7 +50,10 @@ def get_batch_size(model_type, gpu_memory, input_length, output_length):
             raise ValueError(f"Output length {output_length} not supported")
         batch_size = batch_sizes[model_type][gpu_memory][input_length]
     except KeyError:
-        print(f"Batch size not found for model type: {model_type}, input length: {input_length}, gpu memory: {gpu_memory}")
+        print(f"Batch size not found for "
+              f"model type: {model_type}, "
+              f"input length: {input_length}, "
+              f"gpu memory: {gpu_memory}")
         raise KeyError
 
     return batch_size
