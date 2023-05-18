@@ -46,7 +46,8 @@ def get_batch_size(model_type, gpu_memory, input_length, output_length):
         elif output_length == 512:
             batch_sizes = batch_sizes_512_output
         else:
-            raise ValueError(f"Output length {output_length} not supported")
+            batch_sizes = batch_sizes_same
+            #raise ValueError(f"Output length {output_length} not supported")
         batch_size = batch_sizes[model_type][gpu_memory][input_length]
     except KeyError:
         print(f"Batch size not found for model type: {model_type}, input length: {input_length}, gpu memory: {gpu_memory}")
