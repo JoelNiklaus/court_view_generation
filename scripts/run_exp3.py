@@ -29,7 +29,6 @@ import logging
 import time
 import datetime
 
-
 ### Initialization
 def setup_logger():
     logger = logging.getLogger(__name__)
@@ -42,7 +41,6 @@ def setup_logger():
     logger.addHandler(console_handler)
 
     return logger
-
 
 logger = setup_logger()
 
@@ -57,6 +55,7 @@ parser.add_argument("--output_length", help="Output sequence length for training
 parser.add_argument("--epochs", help="Number of training epochs", type=int)
 parser.add_argument("--total_batch_size", help="The total batch size to use", type=int)
 parser.add_argument("--gm", help="GPU memory size for batch size", type=int)
+parser.add_argument("--origin", help="Use dataset with origin cases")
 args = parser.parse_args()
 
 # print all args
@@ -71,7 +70,6 @@ if torch.cuda.is_available():
 else:
     device = torch.device("cpu")
     logger.info("Running on the CPU")
-
 
 ### Some Methods
 def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_length, num_return_sequences=1,
@@ -89,20 +87,52 @@ def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_leng
     output_texts = [tokenizer.decode(tokens, skip_special_tokens=True) for tokens in output_tokens]
     return output_texts[0], output_tokens
 
-
 # Preprocess data
 def preprocess_function(examples, input_length=args.input_length, output_length=args.output_length):
-    input_texts = [f"facts: {f}" for f in examples["facts"]]
-    target_texts = [f"considerations: {c}" for c in examples["considerations"]]
+    if args.origin == "True":
+        # make sure to truncate each input to half of the total input length
+        half_input_length = input_length // 2
+        logger.info(f"Taking {half_input_length} tokens for origin_facts and {half_input_length} tokens for origin_considerations concatenated as input")
 
-    input_encodings = [
-        tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length)
-        for text
-        in input_texts]
+        origin_facts_texts = [f"origin_facts: {f}" for f in examples["origin_facts"]]
+        origin_considerations_texts = [f"origin_considerations: {c}" for c in examples["origin_considerations"]]
+
+        # tokenize each part separately
+        origin_facts_encodings = [
+            tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True,
+                                  max_length=half_input_length)
+            for text
+            in origin_facts_texts]
+        origin_considerations_encodings = [
+            tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True,
+                                  max_length=half_input_length)
+            for text
+            in origin_considerations_texts]
+
+        # combine the two parts into the final input
+        input_encodings = [
+            {
+                "input_ids": torch.cat([fact_encoding["input_ids"], consideration_encoding["input_ids"]], dim=-1),
+                "attention_mask": torch.cat([fact_encoding["attention_mask"], consideration_encoding["attention_mask"]],
+                                            dim=-1)
+                }
+            for fact_encoding, consideration_encoding
+            in zip(origin_facts_encodings, origin_considerations_encodings)
+            ]
+    else:
+        input_texts = [f"facts: {f}" for f in examples["facts"]]
+        input_encodings = [
+            tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length)
+            for text
+            in input_texts]
+
+    ## Ab hier same for both
+    target_texts = [f"considerations: {c}" for c in examples["considerations"]]
     target_encodings = [
         tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True,
                               max_length=output_length) for text
         in target_texts]
+    logger.info(f"Taking {output_length} tokens for considerations as target")
 
     inputs = {
         "input_ids": torch.cat([encoding["input_ids"] for encoding in input_encodings], dim=0),
@@ -118,7 +148,6 @@ def preprocess_function(examples, input_length=args.input_length, output_length=
         "attention_mask": inputs["attention_mask"].tolist(),
         "labels": targets["input_ids"].tolist(),
     }
-
 
 def average_rouge_scores(rouge_scores_list):
     avg_scores = {
@@ -140,7 +169,6 @@ def average_rouge_scores(rouge_scores_list):
 
     return avg_scores
 
-
 def average_bert_score(bert_scores):
     total_precision = 0
     total_recall = 0
@@ -158,9 +186,7 @@ def average_bert_score(bert_scores):
         'f1': total_f1 / count
     }
 
-
 output_examples = []
-
 
 def compute_scores(test_data, model, tokenizer, num_examples=100):
     scores = {'meteor': [], 'rouge': [], 'bleu': [], 'bert': []}
@@ -353,7 +379,12 @@ model.config.pad_token_id = tokenizer.pad_token_id
 model.config.eos_token_id = tokenizer.eos_token_id
 
 # Load dataset
-dataset = load_dataset("rcds/swiss_court_view_generation", "full")
+if args.origin == "True":
+    logger.info("Loading origin dataset")
+    dataset = load_dataset("rcds/swiss_court_view_generation", "origin")
+else:
+    logger.info("Loading full dataset")
+    dataset = load_dataset("rcds/swiss_court_view_generation", "full")
 train_dataset = dataset['train']
 eval_dataset = dataset['validation']
 test_dataset = dataset['test']
@@ -374,7 +405,7 @@ test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
 
 grad_acc_steps = args.total_batch_size // batch_size
 # add train size, seq length to output dir
-output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_inlen={args.input_length}_outlen={args.output_length}_batchsize={batch_size}_gaccsteps={grad_acc_steps}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_inlen={args.input_length}_outlen={args.output_length}_batchsize={batch_size}_gaccsteps={grad_acc_steps}_origin={args.origin}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
 # set wandb run name
 wandb.init(name=output_dir.split('/')[-1])
 # log output dir to wandb
@@ -395,10 +426,14 @@ wandb.log({"do_sample_on_gen": do_sample_on_gen})
 # log all args to wandb
 wandb.config.update(args)
 
+
 # Tokenize datasets
 train_data = train_dataset.map(lambda x: preprocess_function(x), batched=True)
 eval_data = eval_dataset.map(lambda x: preprocess_function(x), batched=True)
 test_data = test_dataset.map(lambda x: preprocess_function(x), batched=True)
+
+eval_steps = 100 if args.origin == "True" else 1000
+
 
 model.resize_token_embeddings(len(tokenizer))
 training_args = TrainingArguments(
@@ -408,7 +443,7 @@ training_args = TrainingArguments(
     per_device_eval_batch_size=batch_size,
     gradient_accumulation_steps=grad_acc_steps,
     evaluation_strategy=IntervalStrategy.STEPS,
-    eval_steps=1000,
+    eval_steps=eval_steps,
     save_steps=10_000,
     save_total_limit=2,
     load_best_model_at_end=True,
