@@ -56,7 +56,11 @@ parser.add_argument("--epochs", help="Number of training epochs", type=int)
 parser.add_argument("--total_batch_size", help="The total batch size to use", type=int)
 parser.add_argument("--gm", help="GPU memory size for batch size", type=int)
 parser.add_argument("--origin", help="Use dataset with origin cases")
+parser.add_argument("--sum", help="Loads summarization dataset if True")
 args = parser.parse_args()
+
+if args.origin == "True" and args.sum == "True":
+    raise ValueError("Cannot use both origin and sum flags (as True)")
 
 # print all args
 logger.info(args)
@@ -89,6 +93,16 @@ def generate_text(model, tokenizer, input_text_encoded, attention_mask, max_leng
 
 # Preprocess data
 def preprocess_function(examples, input_length=args.input_length, output_length=args.output_length):
+    """
+    if args.origin is "True": it takes origin_facts and origin_considerations as input
+    else: it takes facts and considerations as input except specific input_col_name and target_col_name are given as arguments
+    """
+    if args.sum == "True":
+        input_col_name = "text"
+        target_col_name = "regeste"
+    if args.sum == "False":
+        input_col_name = "facts"
+        target_col_name = "considerations"
     if args.origin == "True":
         # make sure to truncate each input to half of the total input length
         half_input_length = input_length // 2
@@ -120,19 +134,19 @@ def preprocess_function(examples, input_length=args.input_length, output_length=
             in zip(origin_facts_encodings, origin_considerations_encodings)
             ]
     else:
-        input_texts = [f"facts: {f}" for f in examples["facts"]]
+        input_texts = [f"{input_col_name}: {f}" for f in examples[input_col_name]]
         input_encodings = [
             tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True, max_length=input_length)
             for text
             in input_texts]
 
     ## Ab hier same for both
-    target_texts = [f"considerations: {c}" for c in examples["considerations"]]
+    target_texts = [f"{target_col_name}: {c}" for c in examples[target_col_name]]
     target_encodings = [
         tokenizer.encode_plus(text, return_tensors="pt", padding="max_length", truncation=True,
                               max_length=output_length) for text
         in target_texts]
-    logger.info(f"Taking {output_length} tokens for considerations as target")
+    logger.info(f"Taking {output_length} tokens for {target_col_name} as target")
 
     inputs = {
         "input_ids": torch.cat([encoding["input_ids"] for encoding in input_encodings], dim=0),
@@ -289,6 +303,19 @@ def load_model(model_name, tokenizer_name):
         raise ValueError(f"Model {model_name} not supported")
     return model, tokenizer
 
+def get_datasets():
+    # Load dataset
+    if args.sum == "True":
+        logger.info("Loading summarization dataset")
+        dataset = load_dataset("rcds/swiss_ruling_summarization")
+    else:
+        if args.origin == "True":
+            logger.info("Loading origin dataset")
+            dataset = load_dataset("rcds/swiss_court_view_generation", "origin")
+        else:
+            logger.info("Loading full dataset")
+            dataset = load_dataset("rcds/swiss_court_view_generation", "full")
+    return dataset['train'], dataset['validation'], dataset['test']
 
 def log_test_scores(meteor_score_avg, rouge_score_avg, bleu_score_avg, bert_score_avg):
     wandb.log({
@@ -378,16 +405,8 @@ num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
 model.config.pad_token_id = tokenizer.pad_token_id
 model.config.eos_token_id = tokenizer.eos_token_id
 
-# Load dataset
-if args.origin == "True":
-    logger.info("Loading origin dataset")
-    dataset = load_dataset("rcds/swiss_court_view_generation", "origin")
-else:
-    logger.info("Loading full dataset")
-    dataset = load_dataset("rcds/swiss_court_view_generation", "full")
-train_dataset = dataset['train']
-eval_dataset = dataset['validation']
-test_dataset = dataset['test']
+
+train_dataset, eval_dataset, test_dataset = get_datasets()
 
 # Update args values with the full lengths of the dataset splits if the args values are -1
 if args.train_size == -1:
@@ -403,11 +422,17 @@ train_dataset = train_dataset.shuffle(seed).select(range(args.train_size))
 eval_dataset = eval_dataset.shuffle(seed).select(range(args.eval_size))
 test_dataset = test_dataset.shuffle(seed).select(range(args.test_size))
 
+
+project_name = "summarization" if args.sum == "True" else "court view generation"
+logger.info("Project name: " + project_name)
+os.environ["WANDB_PROJECT"] = project_name
+os.environ["WANDB_RUN_GROUP"] = f"{model_name}, {len(train_dataset)}"
+
 grad_acc_steps = args.total_batch_size // batch_size
 # add train size, seq length to output dir
 output_dir = f"output/{args.model.split('/')[-1]}_trainsize={args.train_size}_inlen={args.input_length}_outlen={args.output_length}_batchsize={batch_size}_gaccsteps={grad_acc_steps}_origin={args.origin}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}"
 # set wandb run name
-wandb.init(name=output_dir.split('/')[-1])
+wandb.init(name=output_dir.split('/')[-1]) # means
 # log output dir to wandb
 wandb.log({"output_dir": output_dir})
 
@@ -415,9 +440,6 @@ logger.info("Model name:" + model_name + " tokenizer: " + tokenizer_name + " fin
     finetune) + " output_dir: " + output_dir)
 logger.info("Train dataset size: " + str(len(train_dataset)) + ", Eval dataset size: " + str(
     len(eval_dataset)) + ", Test dataset size: " + str(len(test_dataset)))
-
-os.environ["WANDB_PROJECT"] = "court view generation"
-os.environ["WANDB_RUN_GROUP"] = f"{model_name}, {len(train_dataset)}"
 
 # generate by sampling or not
 do_sample_on_gen = True
